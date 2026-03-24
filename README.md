@@ -4,7 +4,8 @@
 
 ## Features
 
--
+- lighthouse skill
+- design-system-extractor skill
 
 ## Installation
 
