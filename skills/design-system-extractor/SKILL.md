@@ -1,6 +1,6 @@
 ---
 name: design-system-extractor
-description: Extract and build a complete design system from any live website. Use this skill whenever the user provides a URL and wants to analyze its design, extract design tokens, build a component library reference, create a style guide, or replicate a site's look and feel. Also trigger when the user mentions "design system", "style guide", "design tokens", or "UI analysis" in connection with a specific website or URL. Even if the user just says "make something that looks like [site]" or "I like the design of [url]", this skill applies.
+description: Extract and build a complete design system from any live website using Playwright. MUST USE whenever a user provides a URL and wants to analyze, extract, or replicate its design — including design tokens (CSS/JSON), color palettes, typography, spacing, component patterns, or style guides. Trigger on "design system", "style guide", "design tokens", "UI analysis", "color palette", "extract styles", "analyze the design", "[url] 처럼 만들어줘", "[url] 디자인 분석해줘", "[site] 색상/폰트 뽑아줘". Even casual "make something that looks like [site]" or "I like the design of [url]" applies. If a URL appears with any mention of design, colors, fonts, components, tokens, or visual style — use this skill. Do NOT skip; design extraction is multi-phase (Playwright capture, pattern analysis, token+doc generation) and always benefits from this structured workflow.
 ---
 
 # Design System Extractor
@@ -10,6 +10,12 @@ You are building a comprehensive design system by analyzing a live website. The 
 ## Why this matters
 
 Design systems are the backbone of consistent UI. Extracting one from a real site means you're capturing battle-tested design decisions — color relationships that actually work together, spacing rhythms that feel natural, typography scales that maintain hierarchy. This isn't about pixel-perfect copying; it's about understanding the *system* behind the visuals.
+
+## Before You Start
+
+1. **Confirm the target URL** — If the user hasn't provided one, ask for it before doing anything else.
+2. **Check Playwright availability** — This skill depends on the Playwright MCP tools (`mcp__playwright__*`). If they're not available, inform the user and fall back to analyzing the site using your training knowledge, but clearly note that the results are approximations rather than live extractions.
+3. **Clarify scope** — Does the user want the full system (tokens + components + guide), or just specific parts? Default to full extraction unless told otherwise.
 
 ## Overview
 
@@ -22,133 +28,22 @@ The process has three phases:
 
 ### Screenshot Capture
 
-Use Playwright to visit the target URL and capture the overall visual design.
+Use the Playwright MCP tools to visit the target URL and capture the overall visual design.
 
-1. Navigate to the URL
-2. Take a full-page screenshot to understand the overall layout and visual hierarchy
-3. Take viewport-sized screenshots of key sections (hero, navigation, content areas, footer)
-4. If the site has distinct pages (about, pricing, etc.), visit 2-3 additional pages for broader coverage
+1. `mcp__playwright__browser_navigate` — Navigate to the URL. If the page takes long to load (SPA with heavy JS), use `mcp__playwright__browser_wait_for` to wait for key elements before proceeding.
+2. `mcp__playwright__browser_take_screenshot` — Take a full-page screenshot to understand the overall layout and visual hierarchy.
+3. Take viewport-sized screenshots of key sections (hero, navigation, content areas, footer) by scrolling or using element-targeted screenshots.
+4. If the site has distinct pages (about, pricing, etc.), navigate to 2-3 additional pages for broader coverage.
 
 The screenshots give you the *feeling* of the design — the gestalt that raw CSS values can't capture. Look at them carefully before diving into the data.
 
 ### DOM/CSS Extraction
 
-Use Playwright's `browser_evaluate` to run JavaScript on the page and extract concrete values. This is where precision matters.
+Use `mcp__playwright__browser_evaluate` to run JavaScript on the page and extract concrete values. This is where precision matters.
 
-Run the following extraction script on the page:
+Run the token extraction script from `scripts/extract-tokens.js` on the page. This script collects colors, fonts, font sizes, spacing, border radii, shadows, transitions, z-indices, and CSS custom properties from `:root`.
 
-```javascript
-(() => {
-  const result = { colors: new Set(), fonts: new Set(), fontSizes: new Set(), spacing: new Set(), borderRadii: new Set(), shadows: new Set(), transitions: new Set(), zIndices: new Set() };
-
-  const allElements = document.querySelectorAll('*');
-  const computed = [];
-
-  allElements.forEach(el => {
-    const style = window.getComputedStyle(el);
-
-    // Colors
-    ['color', 'backgroundColor', 'borderColor', 'outlineColor'].forEach(prop => {
-      const val = style[prop];
-      if (val && val !== 'rgba(0, 0, 0, 0)' && val !== 'transparent') result.colors.add(val);
-    });
-
-    // Typography
-    result.fonts.add(style.fontFamily);
-    result.fontSizes.add(style.fontSize);
-
-    // Spacing (margin, padding)
-    ['marginTop', 'marginRight', 'marginBottom', 'marginLeft', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'gap'].forEach(prop => {
-      const val = style[prop];
-      if (val && val !== '0px') result.spacing.add(val);
-    });
-
-    // Border radius
-    const br = style.borderRadius;
-    if (br && br !== '0px') result.borderRadii.add(br);
-
-    // Box shadow
-    const shadow = style.boxShadow;
-    if (shadow && shadow !== 'none') result.shadows.add(shadow);
-
-    // Transitions
-    const transition = style.transition;
-    if (transition && transition !== 'all 0s ease 0s') result.transitions.add(transition);
-
-    // z-index
-    const z = style.zIndex;
-    if (z !== 'auto') result.zIndices.add(z);
-  });
-
-  // Convert Sets to sorted Arrays
-  const output = {};
-  for (const [key, val] of Object.entries(result)) {
-    output[key] = [...val].sort();
-  }
-
-  // Also grab CSS custom properties from :root
-  const rootStyles = getComputedStyle(document.documentElement);
-  const cssVars = {};
-  for (const sheet of document.styleSheets) {
-    try {
-      for (const rule of sheet.cssRules) {
-        if (rule.selectorText === ':root' || rule.selectorText === 'html') {
-          for (const prop of rule.style) {
-            if (prop.startsWith('--')) {
-              cssVars[prop] = rootStyles.getPropertyValue(prop).trim();
-            }
-          }
-        }
-      }
-    } catch(e) {} // CORS stylesheets will throw
-  }
-  output.cssCustomProperties = cssVars;
-
-  return JSON.stringify(output, null, 2);
-})()
-```
-
-Also extract component-level information:
-
-```javascript
-(() => {
-  // Identify interactive elements and their states
-  const buttons = [...document.querySelectorAll('button, [role="button"], a.btn, .button, input[type="submit"]')];
-  const cards = [...document.querySelectorAll('[class*="card"], [class*="Card"]')];
-  const inputs = [...document.querySelectorAll('input, textarea, select')];
-  const navs = [...document.querySelectorAll('nav, [role="navigation"]')];
-
-  const getStyles = (el) => {
-    const s = window.getComputedStyle(el);
-    return {
-      tag: el.tagName.toLowerCase(),
-      classes: el.className,
-      padding: s.padding,
-      margin: s.margin,
-      fontSize: s.fontSize,
-      fontWeight: s.fontWeight,
-      lineHeight: s.lineHeight,
-      color: s.color,
-      backgroundColor: s.backgroundColor,
-      borderRadius: s.borderRadius,
-      border: s.border,
-      boxShadow: s.boxShadow,
-      display: s.display,
-      gap: s.gap,
-      width: s.width,
-      height: s.height,
-    };
-  };
-
-  return JSON.stringify({
-    buttons: buttons.slice(0, 10).map(getStyles),
-    cards: cards.slice(0, 5).map(getStyles),
-    inputs: inputs.slice(0, 5).map(getStyles),
-    navs: navs.slice(0, 3).map(getStyles),
-    headings: [...document.querySelectorAll('h1,h2,h3,h4,h5,h6')].slice(0, 10).map(getStyles),
-  }, null, 2);
-})()
-```
+Then run the component extraction script from `scripts/extract-components.js` to gather styling data for buttons, cards, inputs, navigation, and headings.
 
 ### Additional Data Points
 
@@ -157,14 +52,24 @@ Also check for:
 - **Media queries**: Check for breakpoint patterns in stylesheets
 - **Icon system**: Are they using SVG inline, icon fonts (Font Awesome, Material Icons), or image sprites?
 
+### Handling Common Issues
+
+- **SPA / slow-loading sites**: Use `mcp__playwright__browser_wait_for` with a selector for the main content container before extracting. Some sites render content dynamically — wait for at least the hero section to appear.
+- **Login-required sites**: If a login wall blocks access, inform the user and ask for credentials or an alternative public URL. Do not attempt to bypass authentication.
+- **CORS-blocked stylesheets**: The extraction script already has try/catch for this. When external stylesheets are blocked, note which ones couldn't be read and rely more heavily on computed styles (which are always available).
+- **Cookie consent banners**: Dismiss them via `mcp__playwright__browser_click` if possible, as they can obscure screenshots and affect layout measurements.
+
 ## Phase 2: Analyze
 
-Now you have raw data and visual context. Time to find the system.
+Now you have raw data and visual context. Time to find the system. Use `mcp__playwright__browser_evaluate` to run analysis scripts directly in the browser, or process the extracted data yourself.
 
 ### Color Analysis
 
-1. **Convert all colors to a common format** (HSL is best for grouping)
-2. **Cluster similar colors** — Colors within 5% lightness and 10 hue degrees of each other are likely the same semantic color
+1. **Convert all colors to a common format** — Use HSL for grouping. Run a script via `browser_evaluate` to convert all extracted RGB/RGBA values to HSL:
+   ```javascript
+   // Convert rgb(r, g, b) strings to {h, s, l} objects for clustering
+   ```
+2. **Cluster similar colors** — Colors within 5% lightness and 10 hue degrees of each other are likely the same semantic color. Group them and pick the most frequently used value as the representative.
 3. **Identify roles**:
    - **Primary**: The dominant brand color (usually on CTAs and key UI elements)
    - **Secondary**: Supporting brand color
@@ -172,23 +77,23 @@ Now you have raw data and visual context. Time to find the system.
    - **Success/Warning/Error/Info**: Semantic colors (look for greens, yellows, reds, blues in context)
    - **Background**: Page and section backgrounds
    - **Surface**: Card and container backgrounds
-4. **Build a scale** for each color family (50-900 or similar steps)
+4. **Build a scale** for each color family (50-900 steps). Generate intermediate steps by adjusting lightness in HSL space if the site only uses a few shades.
 
 Refer to the screenshots to validate — does the primary color you identified actually *feel* like the dominant brand color?
 
 ### Typography Analysis
 
-1. **Font families**: Usually 1-2 families (heading + body). Note the font stack.
-2. **Type scale**: Map the extracted font sizes into a coherent scale. Look for a ratio (1.2 minor third, 1.25 major third, 1.333 perfect fourth, etc.)
+1. **Font families**: Usually 1-2 families (heading + body). Note the font stack. Check which fonts are loaded via `document.fonts` API.
+2. **Type scale**: Map the extracted font sizes into a coherent scale. Look for a ratio (1.2 minor third, 1.25 major third, 1.333 perfect fourth, etc.). Discard outlier sizes that appear only once.
 3. **Font weights**: Typically 400 (regular), 500 (medium), 600 (semibold), 700 (bold)
 4. **Line heights**: Usually 1.2-1.4 for headings, 1.5-1.75 for body text
 5. **Letter spacing**: Note any tracking adjustments, especially on headings or uppercase text
 
 ### Spacing Analysis
 
-1. **Find the base unit** — Most design systems use a 4px or 8px base
-2. **Build a scale**: Map extracted values to a consistent set (4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, etc.)
-3. **Identify patterns**: Section padding, card padding, element gaps
+1. **Find the base unit** — Most design systems use a 4px or 8px base. Look at the most frequently occurring spacing values for the pattern.
+2. **Build a scale**: Map extracted values to a consistent set (4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, etc.). Round nearby values to the nearest scale step.
+3. **Identify patterns**: Section padding, card padding, element gaps — these reveal the grid and rhythm.
 
 ### Component Pattern Analysis
 
@@ -340,10 +245,11 @@ Key design principles observed from the site.
 
 ## Workflow Summary
 
-1. Ask the user for the target URL (if not already provided)
-2. Navigate to the site with Playwright, capture screenshots
-3. Extract DOM/CSS data via browser_evaluate
-4. Analyze and cluster the raw data into a coherent system
-5. Generate all output files
-6. Present a summary to the user with key findings and any notable design decisions
-7. Ask if they want adjustments (e.g., different naming, additional pages to analyze, specific components to focus on)
+1. Confirm the target URL with the user (if not already provided)
+2. Check Playwright MCP availability; fall back gracefully if unavailable
+3. Navigate to the site with `mcp__playwright__browser_navigate`, capture screenshots with `mcp__playwright__browser_take_screenshot`
+4. Extract DOM/CSS data via `mcp__playwright__browser_evaluate` using the bundled scripts
+5. Analyze and cluster the raw data into a coherent system
+6. Generate all output files (tokens.css, tokens.json, components.md, guide.md)
+7. Present a summary to the user with key findings and any notable design decisions
+8. Ask if they want adjustments (e.g., different naming, additional pages to analyze, specific components to focus on)
