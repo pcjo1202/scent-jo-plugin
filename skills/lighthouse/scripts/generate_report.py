@@ -77,13 +77,16 @@ def grade(name, value):
     return ("poor", "Poor")
 
 
-def generate(csv_path, target_url, runs):
+def generate(csv_path, target_url, runs, device_name="Mobile", throttle_name="Simulated", throttle_desc="RTT 150ms, 1.6Mbps down, CPU 4x"):
     data = read_csv(csv_path)
     if not data:
         print("ERROR: No valid measurement data found")
         sys.exit(1)
 
     safe_url = html_mod.escape(target_url)
+    safe_device = html_mod.escape(device_name)
+    safe_throttle = html_mod.escape(throttle_name)
+    safe_throttle_desc = html_mod.escape(throttle_desc)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     metrics = {}
@@ -136,6 +139,9 @@ def generate(csv_path, target_url, runs):
   <td>{ss['min']:.0f}</td><td>{ss['max']:.0f}</td><td>-</td>
 </tr>"""
 
+    # --- Measurement timestamp from CSV filename ---
+    measurement_ts = os.path.basename(csv_path).replace("lighthouse_results_", "").replace(".csv", "")
+
     # --- Sanitize URL for filename ---
     safe_filename_url = target_url.replace("https://", "").replace("http://", "").replace("/", "_")
 
@@ -186,7 +192,9 @@ def generate(csv_path, target_url, runs):
   <div class="meta">
     <span><strong>URL:</strong> {safe_url}</span>
     <span><strong>Runs:</strong> {runs} (valid: {len(data)})</span>
-    <span><strong>Throttling:</strong> Simulated 4G</span>
+    <br>
+    <span><strong>Device:</strong> {safe_device}</span>
+    <span><strong>Throttling:</strong> {safe_throttle} ({safe_throttle_desc})</span>
     <span><strong>Date:</strong> {now}</span>
   </div>
 
@@ -204,6 +212,10 @@ def generate(csv_path, target_url, runs):
       <thead><tr><th>Metric</th><th>Avg</th><th>Median</th><th>P75</th><th>P90</th><th>Min</th><th>Max</th><th>StdDev</th></tr></thead>
       <tbody>{stats_rows}</tbody>
     </table>
+    <p style="font-size:0.75rem;color:#868e96;margin-top:0.5rem;line-height:1.8;">
+      <strong>Avg</strong>: 전체 평균 &nbsp;|&nbsp; <strong>Median</strong>: 중앙값 (등급 판정 기준) &nbsp;|&nbsp; <strong>P75</strong>: 75번째 백분위 &nbsp;|&nbsp; <strong>P90</strong>: 90번째 백분위 (스파이크 감지 기준)<br>
+      <strong>Min/Max</strong>: 최솟값/최댓값 &nbsp;|&nbsp; <strong>StdDev</strong>: 표준편차 (측정 안정성 지표)
+    </p>
   </div>
 
   <div class="card">
@@ -218,6 +230,7 @@ def generate(csv_path, target_url, runs):
         <tr><td>INP<span class="metric-desc">Interaction to Next Paint</span></td><td>&le; 200ms</td><td>200 ~ 500ms</td><td>&gt; 500ms</td></tr>
       </tbody>
     </table>
+    <p style="font-size:0.75rem;color:#868e96;margin-top:0.5rem;">출처: <a href="https://web.dev/vitals/" target="_blank" rel="noopener" style="color:#868e96;">Core Web Vitals</a> | <a href="https://web.dev/lcp/" target="_blank" rel="noopener" style="color:#868e96;">LCP</a> | <a href="https://web.dev/cls/" target="_blank" rel="noopener" style="color:#868e96;">CLS</a> | <a href="https://web.dev/inp/" target="_blank" rel="noopener" style="color:#868e96;">INP</a> | <a href="https://web.dev/fcp/" target="_blank" rel="noopener" style="color:#868e96;">FCP</a> | <a href="https://web.dev/ttfb/" target="_blank" rel="noopener" style="color:#868e96;">TTFB</a></p>
   </div>
 </div>
 <script>
@@ -231,7 +244,7 @@ function downloadAsImage() {{
     useCORS: true
   }}).then(canvas => {{
     const link = document.createElement('a');
-    link.download = 'lighthouse_report_{safe_filename_url}_{now.replace(" ","_")}.png';
+    link.download = 'lighthouse_report_{safe_filename_url}_{measurement_ts}.png';
     link.href = canvas.toDataURL('image/png');
     link.click();
     btn.innerHTML = '<svg viewBox="0 0 16 16" style="width:14px;height:14px;fill:currentColor"><path d="M8 12l-4-4h2.5V2h3v6H12L8 12zm-6 2h12v1.5H2V14z"/></svg> Download PNG';
@@ -256,7 +269,10 @@ function downloadAsImage() {{
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <csv_path> <target_url> <runs>")
+    if len(sys.argv) < 4:
+        print(f"Usage: {sys.argv[0]} <csv_path> <target_url> <runs> [device_name] [throttle_name] [throttle_desc]")
         sys.exit(1)
-    generate(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+    device = sys.argv[4] if len(sys.argv) > 4 else "Mobile"
+    throttle = sys.argv[5] if len(sys.argv) > 5 else "Simulated"
+    throttle_desc = sys.argv[6] if len(sys.argv) > 6 else "RTT 150ms, 1.6Mbps down, CPU 4x"
+    generate(sys.argv[1], sys.argv[2], int(sys.argv[3]), device, throttle, throttle_desc)
